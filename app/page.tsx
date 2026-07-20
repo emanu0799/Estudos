@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
 import "./quiz.css";
 import "./auth.css";
@@ -10,8 +10,9 @@ type Module = { id: string; title: string; range: string; articles: Article[] };
 type Law = { law: string; lawNumber: string; source: string; sourcePages: number; modules: Module[] };
 type Review = { reference: string; dueAt: string; stage: number };
 type Subject = { id: string; name: string; goal: string };
-type ImportedSource = { id: string; subjectId: string; name: string; kind: string; addedAt: string };
+type ImportedSource = { id: string; subjectId: string; name: string; kind: string; addedAt: string; status: string };
 type SubjectRow = { id: string; title: string; created_at: string };
+type SourceRow = { id: string; subject_id: string; title: string; original_filename: string | null; mime_type: string | null; created_at: string; processing_status: string };
 
 const sources = [
   { id: "code", label: "Codigo de Obras", file: "/data/code-231.json" },
@@ -53,6 +54,8 @@ export default function Home() {
   const [sendingLink, setSendingLink] = useState(false);
   const [subjectsLoading, setSubjectsLoading] = useState(false);
   const [subjectMessage, setSubjectMessage] = useState("");
+  const [sourceMessage, setSourceMessage] = useState("");
+  const subjectLoadInFlight = useRef(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -84,6 +87,10 @@ export default function Home() {
     try { setImportedSources(JSON.parse(saved)); } catch { window.localStorage.removeItem("academia-imported-sources"); }
   }, []);
   useEffect(() => { window.localStorage.setItem("academia-imported-sources", JSON.stringify(importedSources)); }, [importedSources]);
+  useEffect(() => {
+    if (!userEmail || subjectId === "fiscal") return;
+    void loadSources(subjectId);
+  }, [userEmail, subjectId]);
   useEffect(() => {
     if (!simulationStarted || simulationSubmitted) return;
     const timer = window.setInterval(() => setSimulationSeconds((seconds) => seconds + 1), 1000);
@@ -141,21 +148,25 @@ export default function Home() {
     });
   }
   async function loadSubjects() {
+    if (subjectLoadInFlight.current) return;
+    subjectLoadInFlight.current = true;
     setSubjectsLoading(true); setSubjectMessage("");
     const { data: sessionData } = await supabase.auth.getSession();
     const user = sessionData.session?.user;
-    if (!user) { setSubjectsLoading(false); return; }
+    if (!user) { setSubjectsLoading(false); subjectLoadInFlight.current = false; return; }
     const { data, error } = await supabase.from("subjects").select("id, title, created_at").order("created_at");
-    if (error) { setSubjectMessage("Nao foi possivel carregar suas materias agora."); setSubjectsLoading(false); return; }
+    if (error) { setSubjectMessage("Nao foi possivel carregar suas materias agora."); setSubjectsLoading(false); subjectLoadInFlight.current = false; return; }
     let rows = (data ?? []) as SubjectRow[];
     if (!rows.length) {
       const { data: seeded, error: seedError } = await supabase.from("subjects").insert({ owner_id: user.id, title: "Fiscal de Obras" }).select("id, title, created_at").single();
-      if (seedError || !seeded) { setSubjectMessage("Sua primeira materia nao pode ser criada agora."); setSubjectsLoading(false); return; }
+      if (seedError || !seeded) { setSubjectMessage("Sua primeira materia nao pode ser criada agora."); setSubjectsLoading(false); subjectLoadInFlight.current = false; return; }
       rows = [seeded as SubjectRow];
     }
     const savedSubjects = rows.map((subject) => ({ id: subject.id, name: subject.title, goal: subject.title === "Fiscal de Obras" ? "Concurso publico" : "Materia pessoal" }));
-    setSubjects(savedSubjects); setSubjectId((current) => savedSubjects.some((subject) => subject.id === current) ? current : savedSubjects[0].id);
-    setSubjectsLoading(false);
+    const defaultSubjects = savedSubjects.filter((subject) => subject.name === "Fiscal de Obras");
+    const visibleSubjects = [...savedSubjects.filter((subject) => subject.name !== "Fiscal de Obras"), ...defaultSubjects.slice(-1)];
+    setSubjects(visibleSubjects); setSubjectId((current) => visibleSubjects.some((subject) => subject.id === current) ? current : visibleSubjects[0].id);
+    setSubjectsLoading(false); subjectLoadInFlight.current = false;
   }
   async function createSubject() {
     const name = newSubject.trim();
@@ -169,9 +180,40 @@ export default function Home() {
     const subject = { id: data.id, name: data.title, goal: "Materia pessoal" };
     setSubjects((items) => [...items, subject]); setSubjectId(subject.id); setNewSubject("");
   }
-  function addSource(file: File | null) {
+  async function loadSources(currentSubjectId: string) {
+    const { data, error } = await supabase.from("sources").select("id, subject_id, title, original_filename, mime_type, created_at, processing_status").eq("subject_id", currentSubjectId).order("created_at", { ascending: false });
+    if (error) { setSourceMessage("Nao foi possivel carregar as fontes desta materia."); return; }
+    setImportedSources((data ?? []).map((source) => {
+      const row = source as SourceRow;
+      return { id: row.id, subjectId: row.subject_id, name: row.original_filename || row.title, kind: row.mime_type || "arquivo", addedAt: row.created_at, status: row.processing_status };
+    }));
+  }
+  async function addSource(file: File | null) {
     if (!file) return;
-    setImportedSources((items) => [...items, { id: `${Date.now()}`, subjectId, name: file.name, kind: file.type || "arquivo", addedAt: new Date().toISOString() }]);
+    setSourceMessage("");
+    const { data: sessionData } = await supabase.auth.getSession();
+    const user = sessionData.session?.user;
+    if (!user || subjectId === "fiscal") { setSourceMessage("Aguarde a materia terminar de sincronizar e tente novamente."); window.alert("Aguarde a materia terminar de sincronizar e tente novamente."); return; }
+    const id = crypto.randomUUID();
+    const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const storagePath = `${user.id}/${subjectId}/${id}-${cleanName}`;
+    const optimisticSource: ImportedSource = { id, subjectId, name: file.name, kind: file.type || "arquivo", addedAt: new Date().toISOString(), status: "enviando" };
+    setImportedSources((items) => [optimisticSource, ...items]);
+    const { error: uploadError } = await supabase.storage.from("study-materials").upload(storagePath, file, { contentType: file.type || "application/octet-stream", upsert: false });
+    if (uploadError) {
+      setImportedSources((items) => items.filter((item) => item.id !== id));
+      setSourceMessage("O arquivo nao foi enviado. Tente novamente."); window.alert("O arquivo nao foi enviado. Tente novamente.");
+      return;
+    }
+    const { error: sourceError } = await supabase.from("sources").insert({ id, subject_id: subjectId, title: file.name, source_type: "upload", storage_path: storagePath, original_filename: file.name, mime_type: file.type || "application/octet-stream", byte_size: file.size, processing_status: "queued" });
+    if (sourceError) {
+      await supabase.storage.from("study-materials").remove([storagePath]);
+      setImportedSources((items) => items.filter((item) => item.id !== id));
+      setSourceMessage("O arquivo foi cancelado porque os dados da fonte nao puderam ser salvos."); window.alert("O arquivo foi cancelado porque os dados da fonte nao puderam ser salvos.");
+      return;
+    }
+    await supabase.from("source_processing_jobs").insert({ source_id: id, requested_by: user.id, status: "queued" });
+    setImportedSources((items) => items.map((item) => item.id === id ? { ...item, status: "queued" } : item));
   }
   async function sendMagicLink(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
