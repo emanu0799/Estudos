@@ -11,6 +11,7 @@ type Law = { law: string; lawNumber: string; source: string; sourcePages: number
 type Review = { reference: string; dueAt: string; stage: number };
 type Subject = { id: string; name: string; goal: string };
 type ImportedSource = { id: string; subjectId: string; name: string; kind: string; addedAt: string };
+type SubjectRow = { id: string; title: string; created_at: string };
 
 const sources = [
   { id: "code", label: "Codigo de Obras", file: "/data/code-231.json" },
@@ -50,10 +51,18 @@ export default function Home() {
   const [authEmail, setAuthEmail] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [sendingLink, setSendingLink] = useState(false);
+  const [subjectsLoading, setSubjectsLoading] = useState(false);
+  const [subjectMessage, setSubjectMessage] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setUserEmail(data.session?.user.email ?? null));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUserEmail(session?.user.email ?? null));
+    supabase.auth.getSession().then(({ data }) => {
+      setUserEmail(data.session?.user.email ?? null);
+      if (data.session?.user) void loadSubjects();
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserEmail(session?.user.email ?? null);
+      if (session?.user) void loadSubjects();
+    });
     return () => listener.subscription.unsubscribe();
   }, []);
 
@@ -131,10 +140,33 @@ export default function Home() {
       return [...items, ...newReviews];
     });
   }
-  function createSubject() {
+  async function loadSubjects() {
+    setSubjectsLoading(true); setSubjectMessage("");
+    const { data: sessionData } = await supabase.auth.getSession();
+    const user = sessionData.session?.user;
+    if (!user) { setSubjectsLoading(false); return; }
+    const { data, error } = await supabase.from("subjects").select("id, title, created_at").order("created_at");
+    if (error) { setSubjectMessage("Nao foi possivel carregar suas materias agora."); setSubjectsLoading(false); return; }
+    let rows = (data ?? []) as SubjectRow[];
+    if (!rows.length) {
+      const { data: seeded, error: seedError } = await supabase.from("subjects").insert({ owner_id: user.id, title: "Fiscal de Obras" }).select("id, title, created_at").single();
+      if (seedError || !seeded) { setSubjectMessage("Sua primeira materia nao pode ser criada agora."); setSubjectsLoading(false); return; }
+      rows = [seeded as SubjectRow];
+    }
+    const savedSubjects = rows.map((subject) => ({ id: subject.id, name: subject.title, goal: subject.title === "Fiscal de Obras" ? "Concurso publico" : "Materia pessoal" }));
+    setSubjects(savedSubjects); setSubjectId((current) => savedSubjects.some((subject) => subject.id === current) ? current : savedSubjects[0].id);
+    setSubjectsLoading(false);
+  }
+  async function createSubject() {
     const name = newSubject.trim();
     if (!name) return;
-    const subject = { id: `${Date.now()}`, name, goal: "Materia pessoal" };
+    setSubjectMessage("");
+    const { data: sessionData } = await supabase.auth.getSession();
+    const user = sessionData.session?.user;
+    if (!user) { setSubjectMessage("Entre na sua conta antes de criar uma materia."); return; }
+    const { data, error } = await supabase.from("subjects").insert({ owner_id: user.id, title: name }).select("id, title, created_at").single();
+    if (error || !data) { setSubjectMessage("Nao foi possivel salvar a materia. Tente novamente."); return; }
+    const subject = { id: data.id, name: data.title, goal: "Materia pessoal" };
     setSubjects((items) => [...items, subject]); setSubjectId(subject.id); setNewSubject("");
   }
   function addSource(file: File | null) {
