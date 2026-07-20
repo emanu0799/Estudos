@@ -42,9 +42,6 @@ next-env.d.ts
 /outputs/
 /work/
 
-# build directories
-/build/
-
 # supabase keys (security)
 supabase/.env*
 supabase/secrets/
