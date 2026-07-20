@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "./supabase";
 import "./quiz.css";
+import "./auth.css";
 
 type Article = { id: string; number: number; reference: string; text: string };
 type Module = { id: string; title: string; range: string; articles: Article[] };
@@ -44,6 +46,16 @@ export default function Home() {
   const [subjectId, setSubjectId] = useState("fiscal");
   const [newSubject, setNewSubject] = useState("");
   const [importedSources, setImportedSources] = useState<ImportedSource[]>([]);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [sendingLink, setSendingLink] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setUserEmail(data.session?.user.email ?? null));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => setUserEmail(session?.user.email ?? null));
+    return () => listener.subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("academia-fiscal-reviews");
@@ -129,6 +141,21 @@ export default function Home() {
     if (!file) return;
     setImportedSources((items) => [...items, { id: `${Date.now()}`, subjectId, name: file.name, kind: file.type || "arquivo", addedAt: new Date().toISOString() }]);
   }
+  async function sendMagicLink(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!authEmail.trim()) return;
+    setSendingLink(true); setAuthMessage("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: authEmail.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setSendingLink(false);
+    setAuthMessage(error ? "Nao foi possivel enviar o link. Confira o e-mail e tente novamente." : "Link enviado. Abra seu e-mail para entrar e voltar para a Academia.");
+  }
+  async function signOut() {
+    await supabase.auth.signOut();
+    setAuthMessage("");
+  }
   const formatDue = (dueAt: string) => new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(new Date(dueAt));
   const showReviews = active === "Hoje" || active === "Revisoes" || active === "Caderno de erros";
   const simulationScore = questions.filter((item, index) => simulationAnswers[index] === item.correct).length;
@@ -136,7 +163,7 @@ export default function Home() {
 
   if (active === "Materias") return <main>
     <aside className="rail"><div className="brand"><span className="brand-mark">AF</span><span>Academia<br/><em>Fiscal</em></span></div><p className="edition">SEU ACERVO DE ESTUDOS</p><nav>{["Hoje", "Biblioteca", "Questoes", "Revisoes", "Simulados", "Materias", "Caderno de erros"].map((item) => <button key={item} className={active === item ? "nav-active" : ""} onClick={() => setActive(item)}>{item}</button>)}</nav><div className="rail-bottom"><span className="signal"/> MATERIAS SEPARADAS<br/><small>Fase 3.1</small></div></aside>
-    <section className="content"><header className="topline"><span>ACADEMIA DE ESTUDOS / ACERVO</span><span>{subjects.length} MATERIAS</span></header><section className="quiz-view"><p className="eyebrow">MATERIAS E FONTES</p><h1>Seu material.<br/><em>Seu caminho de estudo.</em></h1><div className="subject-create"><label htmlFor="new-subject">Nova materia ou objetivo</label><div><input id="new-subject" value={newSubject} onChange={(event) => setNewSubject(event.target.value)} onKeyDown={(event) => event.key === "Enter" && createSubject()} placeholder="Ex.: Calculo I, ingles, OAB"/><button className="study-button" onClick={createSubject}>ADICIONAR</button></div></div><div className="subject-list">{subjects.map((subject) => <button key={subject.id} className={subject.id === subjectId ? "subject-current" : ""} onClick={() => setSubjectId(subject.id)}><b>{subject.name}</b><span>{subject.goal}{subject.id === "fiscal" ? " · biblioteca pronta" : " · nova trilha"}</span></button>)}</div><section className="source-import"><p className="eyebrow">IMPORTAR PARA {subjects.find((subject) => subject.id === subjectId)?.name?.toUpperCase()}</p><h2>Adicione uma fonte de estudo</h2><p>PDFs, apostilas, slides e listas serão organizados antes de qualquer geração por IA.</p><label className="file-button" htmlFor="source-file">ESCOLHER ARQUIVO</label><input id="source-file" type="file" accept=".pdf,.doc,.docx,.ppt,.pptx,.txt" onChange={(event) => addSource(event.target.files?.[0] ?? null)}/><div className="imported-sources">{importedSources.filter((source) => source.subjectId === subjectId).length ? importedSources.filter((source) => source.subjectId === subjectId).map((source) => <article key={source.id}><b>{source.name}</b><span>Fonte registrada · aguardando extracao</span></article>) : <span>Nenhuma fonte adicional nesta materia.</span>}</div></section></section></section>
+    <section className="content"><header className="topline"><span>ACADEMIA DE ESTUDOS / ACERVO</span><span>{subjects.length} MATERIAS</span></header><section className="quiz-view"><p className="eyebrow">MATERIAS E FONTES</p><h1>Seu material.<br/><em>Seu caminho de estudo.</em></h1><div className="subject-create"><label htmlFor="new-subject">Nova materia ou objetivo</label><div><input id="new-subject" value={newSubject} onChange={(event) => setNewSubject(event.target.value)} onKeyDown={(event) => event.key === "Enter" && createSubject()} placeholder="Ex.: Calculo I, ingles, OAB"/><button className="study-button" onClick={createSubject}>ADICIONAR</button></div></div><div className="subject-list">{subjects.map((subject) => <button key={subject.id} className={subject.id === subjectId ? "subject-current" : ""} onClick={() => setSubjectId(subject.id)}><b>{subject.name}</b><span>{subject.goal}{subject.id === "fiscal" ? " · biblioteca pronta" : " · nova trilha"}</span></button>)}</div>{userEmail ? <section className="source-import"><p className="eyebrow">IMPORTAR PARA {subjects.find((subject) => subject.id === subjectId)?.name?.toUpperCase()}</p><h2>Adicione uma fonte de estudo</h2><p>PDFs, apostilas, slides e listas serão organizados antes de qualquer geração por IA.</p><div className="account-status"><span>Conectado como {userEmail}</span><button onClick={signOut}>SAIR</button></div><label className="file-button" htmlFor="source-file">ESCOLHER ARQUIVO</label><input id="source-file" type="file" accept=".pdf,.doc,.docx,.ppt,.pptx,.txt" onChange={(event) => addSource(event.target.files?.[0] ?? null)}/><div className="imported-sources">{importedSources.filter((source) => source.subjectId === subjectId).length ? importedSources.filter((source) => source.subjectId === subjectId).map((source) => <article key={source.id}><b>{source.name}</b><span>Fonte registrada · aguardando extracao</span></article>) : <span>Nenhuma fonte adicional nesta materia.</span>}</div></section> : <section className="source-import auth-card"><p className="eyebrow">SUA CONTA</p><h2>Guarde seu acervo com segurança</h2><p>Entre com seu e-mail para que matérias, fontes, questões e revisões sejam suas em qualquer dispositivo.</p><form onSubmit={sendMagicLink}><label htmlFor="auth-email">Seu melhor e-mail</label><div><input id="auth-email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="voce@exemplo.com" required/><button className="study-button" disabled={sendingLink}>{sendingLink ? "ENVIANDO..." : "ENVIAR LINK"}</button></div></form>{authMessage && <p className="auth-message">{authMessage}</p>}</section>}</section></section>
   </main>;
 
   if (active === "Materias") return <main><aside className="rail"><div className="brand"><span className="brand-mark">AF</span><span>Academia<br/><em>Fiscal</em></span></div><p className="edition">SEU ACERVO DE ESTUDOS</p><nav>{["Hoje", "Biblioteca", "Questoes", "Revisoes", "Simulados", "Materias", "Caderno de erros"].map((item) => <button key={item} className={active === item ? "nav-active" : ""} onClick={() => setActive(item)}>{item}</button>)}</nav><div className="rail-bottom"><span className="signal"/> MATERIAS SEPARADAS<br/><small>Fase 3.1</small></div></aside><section className="content"><header className="topline"><span>ACADEMIA DE ESTUDOS / MATERIAS</span><span>{subjects.length} CADASTRADAS</span></header><section className="quiz-view"><p className="eyebrow">SEU ESPACO DE ESTUDO</p><h1>Uma plataforma.<br/><em>Qualquer materia.</em></h1><div className="subject-create"><label htmlFor="new-subject">Nova materia ou objetivo</label><div><input id="new-subject" value={newSubject} onChange={(event) => setNewSubject(event.target.value)} onKeyDown={(event) => event.key === "Enter" && createSubject()} placeholder="Ex.: Calculo I, ingles, OAB"/><button className="study-button" onClick={createSubject}>ADICIONAR</button></div></div><div className="subject-list">{subjects.map((subject) => <button key={subject.id} className={subject.id === subjectId ? "subject-current" : ""} onClick={() => { setSubjectId(subject.id); setActive("Biblioteca"); }}><b>{subject.name}</b><span>{subject.goal}{subject.id === "fiscal" ? " · biblioteca pronta" : " · pronta para receber fontes"}</span></button>)}</div></section></section></main>;
