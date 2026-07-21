@@ -78,7 +78,10 @@ export async function POST(request: Request) {
         text: { format: { type: "json_schema", name: "study_map", strict: true, schema: studyMapSchema } },
       }),
     });
-    if (!response.ok) throw new Error(`A IA retornou erro ${response.status}.`);
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 700);
+      throw new Error(`A IA retornou erro ${response.status}: ${detail}`);
+    }
     const output = await response.json() as { output_text?: string };
     if (!output.output_text) throw new Error("A IA nao retornou conteudo estruturado.");
     const map = JSON.parse(output.output_text) as StudyMap;
