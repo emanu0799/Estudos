@@ -188,7 +188,7 @@ export default function Home() {
       return { id: row.id, subjectId: row.subject_id, name: row.original_filename || row.title, kind: row.mime_type || "arquivo", addedAt: row.created_at, status: row.processing_status };
     });
     setImportedSources(loadedSources);
-    loadedSources.filter((source) => source.status === "queued").forEach((source) => void processSource(source.id));
+    loadedSources.filter((source) => source.status === "queued" || source.status === "failed").forEach((source) => void processSource(source.id));
   }
   async function processSource(sourceId: string) {
     const { data: sessionData } = await supabase.auth.getSession();
@@ -196,11 +196,14 @@ export default function Home() {
     if (!token) return;
     setImportedSources((items) => items.map((item) => item.id === sourceId ? { ...item, status: "extracting" } : item));
     const response = await fetch("/api/process-source", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ sourceId }) });
+    const result = await response.json().catch(() => ({})) as { error?: string; items?: number };
     if (!response.ok) {
       setImportedSources((items) => items.map((item) => item.id === sourceId ? { ...item, status: "failed" } : item));
+      window.alert(result.error || "Nao foi possivel organizar esta fonte agora.");
       return;
     }
     setImportedSources((items) => items.map((item) => item.id === sourceId ? { ...item, status: "ready" } : item));
+    window.alert(`Material organizado: ${result.items ?? 0} itens de estudo foram criados.`);
   }
   async function addSource(file: File | null) {
     if (!file) return;
