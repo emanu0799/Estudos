@@ -183,10 +183,24 @@ export default function Home() {
   async function loadSources(currentSubjectId: string) {
     const { data, error } = await supabase.from("sources").select("id, subject_id, title, original_filename, mime_type, created_at, processing_status").eq("subject_id", currentSubjectId).order("created_at", { ascending: false });
     if (error) { setSourceMessage("Nao foi possivel carregar as fontes desta materia."); return; }
-    setImportedSources((data ?? []).map((source) => {
+    const loadedSources = (data ?? []).map((source) => {
       const row = source as SourceRow;
       return { id: row.id, subjectId: row.subject_id, name: row.original_filename || row.title, kind: row.mime_type || "arquivo", addedAt: row.created_at, status: row.processing_status };
-    }));
+    });
+    setImportedSources(loadedSources);
+    loadedSources.filter((source) => source.status === "queued").forEach((source) => void processSource(source.id));
+  }
+  async function processSource(sourceId: string) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) return;
+    setImportedSources((items) => items.map((item) => item.id === sourceId ? { ...item, status: "extracting" } : item));
+    const response = await fetch("/api/process-source", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ sourceId }) });
+    if (!response.ok) {
+      setImportedSources((items) => items.map((item) => item.id === sourceId ? { ...item, status: "failed" } : item));
+      return;
+    }
+    setImportedSources((items) => items.map((item) => item.id === sourceId ? { ...item, status: "ready" } : item));
   }
   async function addSource(file: File | null) {
     if (!file) return;
@@ -214,6 +228,7 @@ export default function Home() {
     }
     await supabase.from("source_processing_jobs").insert({ source_id: id, requested_by: user.id, status: "queued" });
     setImportedSources((items) => items.map((item) => item.id === id ? { ...item, status: "queued" } : item));
+    await processSource(id);
   }
   async function sendMagicLink(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
