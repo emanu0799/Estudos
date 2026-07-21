@@ -96,6 +96,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, items: items.length });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Falha ao organizar a fonte.";
+    console.error("[process-source]", { sourceId: source.id, message });
     await userClient.from("sources").update({ processing_status: "failed", extraction_error: message }).eq("id", source.id);
     await userClient.from("source_processing_jobs").update({ status: "failed", error_message: message }).eq("source_id", source.id);
     return Response.json({ error: message }, { status: 500 });
