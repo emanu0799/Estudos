@@ -73,7 +73,7 @@ export async function POST(request: Request) {
         instructions: "Voce organiza materiais de estudo em portugues do Brasil. Use somente o arquivo fornecido. Nao invente regras, datas ou referencias. Produza um mapa fiel com topicos que conservem a referencia interna quando ela existir. Os itens serao usados para revisao e criacao posterior de questoes; escreva conteudo objetivo e verificavel.",
         input: [{ role: "user", content: [
           { type: "input_text", text: "Extraia uma visao geral e os principais itens de estudo deste arquivo. Para leis, priorize artigos, capitulos e regras; para materiais de curso, priorize conceitos, definicoes, formulas e procedimentos." },
-          { type: "input_file", file_url: signed.signedUrl, filename: source.original_filename || source.title },
+          { type: "input_file", file_url: signed.signedUrl },
         ] }],
         text: { format: { type: "json_schema", name: "study_map", strict: true, schema: studyMapSchema } },
       }),
