@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase";
 import "./quiz.css";
 import "./auth.css";
+import "./study-map.css";
 
 type Article = { id: string; number: number; reference: string; text: string };
 type Module = { id: string; title: string; range: string; articles: Article[] };
@@ -13,6 +14,7 @@ type Subject = { id: string; name: string; goal: string };
 type ImportedSource = { id: string; subjectId: string; name: string; kind: string; addedAt: string; status: string };
 type SubjectRow = { id: string; title: string; created_at: string };
 type SourceRow = { id: string; subject_id: string; title: string; original_filename: string | null; mime_type: string | null; created_at: string; processing_status: string };
+type StudyItem = { id: string; sourceId: string; externalKey: string; title: string; body: string | null };
 
 const sources = [
   { id: "code", label: "Codigo de Obras", file: "/data/code-231.json" },
@@ -27,6 +29,24 @@ const questions = [
   { ref: "LC 231/2023, art. 70", prompt: "Qual e o valor inicial da multa para infracao grave?", options: ["10 UFM", "50 UFM", "100 UFM", "150 UFM"], correct: 1, explanation: "Infracao grave: 50 UFM como valor inicial, acrescido de 10 UFM para cada infracao prevista." },
   { ref: "LC 231/2023, art. 77", prompt: "Obra executada sem a devida licenca pode sofrer embargo?", options: ["Nao, somente multa", "Sim", "Somente apos 90 dias", "Somente com decisao judicial"], correct: 1, explanation: "Sim. Obra sem a devida licenca e uma das hipoteses expressas de embargo." },
 ];
+
+function StudyMap({ sources, items }: { sources: ImportedSource[]; items: StudyItem[] }) {
+  if (!sources.length) return null;
+  return <section className="study-map" aria-live="polite">
+    <header className="study-map-header"><p className="eyebrow">MAPAS DE ESTUDO</p><h2>O que a fonte ensina.</h2><p>Resumo e topicos organizados a partir de cada material enviado.</p></header>
+    <div className="study-map-list">{sources.map((source) => {
+      const sourceItems = items.filter((item) => item.sourceId === source.id);
+      const overview = sourceItems.find((item) => item.externalKey === "overview");
+      const topics = sourceItems.filter((item) => item.externalKey !== "overview");
+      const status = source.status === "ready" ? "Pronta para estudar" : source.status === "failed" ? "Organizacao interrompida" : "Organizando com IA";
+      return <article className="study-map-source" key={source.id}>
+        <div className="study-map-source-heading"><div><p className="eyebrow">{status}</p><h3>{source.name}</h3></div><span>{topics.length ? `${topics.length} topicos` : "aguardando"}</span></div>
+        {overview ? <p className="study-map-summary">{overview.body}</p> : <p className="study-map-empty">{source.status === "failed" ? "Tente organizar esta fonte novamente mais tarde." : "O mapa aparecera aqui assim que a leitura terminar."}</p>}
+        {topics.length > 0 && <ol className="study-map-topics">{topics.map((item) => <li key={item.id}><b>{item.title}</b>{item.body && <span>{item.body}</span>}</li>)}</ol>}
+      </article>;
+    })}</div>
+  </section>;
+}
 
 export default function Home() {
   const [active, setActive] = useState("Biblioteca");
@@ -48,6 +68,7 @@ export default function Home() {
   const [subjectId, setSubjectId] = useState("fiscal");
   const [newSubject, setNewSubject] = useState("");
   const [importedSources, setImportedSources] = useState<ImportedSource[]>([]);
+  const [studyItems, setStudyItems] = useState<StudyItem[]>([]);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [authEmail, setAuthEmail] = useState("");
   const [authMessage, setAuthMessage] = useState("");
@@ -188,7 +209,15 @@ export default function Home() {
       return { id: row.id, subjectId: row.subject_id, name: row.original_filename || row.title, kind: row.mime_type || "arquivo", addedAt: row.created_at, status: row.processing_status };
     });
     setImportedSources(loadedSources);
+    void loadStudyItems(loadedSources.map((source) => source.id));
     loadedSources.filter((source) => source.status === "queued" || source.status === "failed").forEach((source) => void processSource(source.id));
+  }
+  async function loadStudyItems(sourceIds: string[]) {
+    if (!sourceIds.length) { setStudyItems([]); return; }
+    const { data, error } = await supabase.from("study_items").select("id, source_id, external_key, title, body").in("source_id", sourceIds).order("created_at");
+    if (error) return;
+    const loadedItems = (data ?? []).map((item) => ({ id: item.id, sourceId: item.source_id, externalKey: item.external_key, title: item.title, body: item.body })) as StudyItem[];
+    setStudyItems((items) => [...items.filter((item) => !sourceIds.includes(item.sourceId)), ...loadedItems]);
   }
   async function processSource(sourceId: string) {
     const { data: sessionData } = await supabase.auth.getSession();
@@ -203,6 +232,7 @@ export default function Home() {
       return;
     }
     setImportedSources((items) => items.map((item) => item.id === sourceId ? { ...item, status: "ready" } : item));
+    void loadStudyItems([sourceId]);
     window.alert(`Material organizado: ${result.items ?? 0} itens de estudo foram criados.`);
   }
   async function addSource(file: File | null) {
@@ -253,10 +283,13 @@ export default function Home() {
   const simulationScore = questions.filter((item, index) => simulationAnswers[index] === item.correct).length;
   const simulationTime = `${String(Math.floor(simulationSeconds / 60)).padStart(2, "0")}:${String(simulationSeconds % 60).padStart(2, "0")}`;
 
-  if (active === "Materias") return <main>
+  if (active === "Materias") return <>
+    <main>
     <aside className="rail"><div className="brand"><span className="brand-mark">AF</span><span>Academia<br/><em>Fiscal</em></span></div><p className="edition">SEU ACERVO DE ESTUDOS</p><nav>{["Hoje", "Biblioteca", "Questoes", "Revisoes", "Simulados", "Materias", "Caderno de erros"].map((item) => <button key={item} className={active === item ? "nav-active" : ""} onClick={() => setActive(item)}>{item}</button>)}</nav><div className="rail-bottom"><span className="signal"/> MATERIAS SEPARADAS<br/><small>Fase 3.1</small></div></aside>
     <section className="content"><header className="topline"><span>ACADEMIA DE ESTUDOS / ACERVO</span><span>{subjects.length} MATERIAS</span></header><section className="quiz-view"><p className="eyebrow">MATERIAS E FONTES</p><h1>Seu material.<br/><em>Seu caminho de estudo.</em></h1><div className="subject-create"><label htmlFor="new-subject">Nova materia ou objetivo</label><div><input id="new-subject" value={newSubject} onChange={(event) => setNewSubject(event.target.value)} onKeyDown={(event) => event.key === "Enter" && createSubject()} placeholder="Ex.: Calculo I, ingles, OAB"/><button className="study-button" onClick={createSubject}>ADICIONAR</button></div></div><div className="subject-list">{subjects.map((subject) => <button key={subject.id} className={subject.id === subjectId ? "subject-current" : ""} onClick={() => setSubjectId(subject.id)}><b>{subject.name}</b><span>{subject.goal}{subject.id === "fiscal" ? " · biblioteca pronta" : " · nova trilha"}</span></button>)}</div>{userEmail ? <section className="source-import"><p className="eyebrow">IMPORTAR PARA {subjects.find((subject) => subject.id === subjectId)?.name?.toUpperCase()}</p><h2>Adicione uma fonte de estudo</h2><p>PDFs, apostilas, slides e listas serão organizados antes de qualquer geração por IA.</p><div className="account-status"><span>Conectado como {userEmail}</span><button onClick={signOut}>SAIR</button></div><label className="file-button" htmlFor="source-file">ESCOLHER ARQUIVO</label><input id="source-file" type="file" accept=".pdf,.doc,.docx,.ppt,.pptx,.txt" onChange={(event) => addSource(event.target.files?.[0] ?? null)}/><div className="imported-sources">{importedSources.filter((source) => source.subjectId === subjectId).length ? importedSources.filter((source) => source.subjectId === subjectId).map((source) => <article key={source.id}><b>{source.name}</b><span>Fonte registrada · aguardando extracao</span></article>) : <span>Nenhuma fonte adicional nesta materia.</span>}</div></section> : <section className="source-import auth-card"><p className="eyebrow">SUA CONTA</p><h2>Guarde seu acervo com segurança</h2><p>Entre com seu e-mail para que matérias, fontes, questões e revisões sejam suas em qualquer dispositivo.</p><form onSubmit={sendMagicLink}><label htmlFor="auth-email">Seu melhor e-mail</label><div><input id="auth-email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="voce@exemplo.com" required/><button className="study-button" disabled={sendingLink}>{sendingLink ? "ENVIANDO..." : "ENVIAR LINK"}</button></div></form>{authMessage && <p className="auth-message">{authMessage}</p>}</section>}</section></section>
-  </main>;
+    </main>
+    <StudyMap sources={importedSources.filter((source) => source.subjectId === subjectId)} items={studyItems} />
+  </>;
 
   if (active === "Materias") return <main><aside className="rail"><div className="brand"><span className="brand-mark">AF</span><span>Academia<br/><em>Fiscal</em></span></div><p className="edition">SEU ACERVO DE ESTUDOS</p><nav>{["Hoje", "Biblioteca", "Questoes", "Revisoes", "Simulados", "Materias", "Caderno de erros"].map((item) => <button key={item} className={active === item ? "nav-active" : ""} onClick={() => setActive(item)}>{item}</button>)}</nav><div className="rail-bottom"><span className="signal"/> MATERIAS SEPARADAS<br/><small>Fase 3.1</small></div></aside><section className="content"><header className="topline"><span>ACADEMIA DE ESTUDOS / MATERIAS</span><span>{subjects.length} CADASTRADAS</span></header><section className="quiz-view"><p className="eyebrow">SEU ESPACO DE ESTUDO</p><h1>Uma plataforma.<br/><em>Qualquer materia.</em></h1><div className="subject-create"><label htmlFor="new-subject">Nova materia ou objetivo</label><div><input id="new-subject" value={newSubject} onChange={(event) => setNewSubject(event.target.value)} onKeyDown={(event) => event.key === "Enter" && createSubject()} placeholder="Ex.: Calculo I, ingles, OAB"/><button className="study-button" onClick={createSubject}>ADICIONAR</button></div></div><div className="subject-list">{subjects.map((subject) => <button key={subject.id} className={subject.id === subjectId ? "subject-current" : ""} onClick={() => { setSubjectId(subject.id); setActive("Biblioteca"); }}><b>{subject.name}</b><span>{subject.goal}{subject.id === "fiscal" ? " · biblioteca pronta" : " · pronta para receber fontes"}</span></button>)}</div></section></section></main>;
 
